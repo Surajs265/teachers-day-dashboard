@@ -7,7 +7,6 @@ from rapidfuzz import process
 st.set_page_config(layout="wide")
 st.title("📊 Teachers' Day Campaign Dashboard")
 
-# Upload
 uploaded_file = st.file_uploader("📁 Upload Teachers' Day Excel/CSV File", type=["xlsx", "csv"])
 
 @st.cache_data(show_spinner=False)
@@ -41,9 +40,20 @@ if uploaded_file:
 
         # Sidebar Filters
         st.sidebar.header("🔍 Filters")
-        sbm_filter = st.sidebar.multiselect("Filter by SBM", sorted(df['User Name'].dropna().unique()))
-        state_filter = st.sidebar.multiselect("Filter by State", sorted(df["Student Doctor's State"].dropna().unique()))
-        rbm_filter = st.sidebar.multiselect("Filter by RBM", sorted(df['HQ Code'].dropna().unique()))
+
+        sbm_filter = st.sidebar.multiselect(
+            "Filter by SBM", sorted(df['User Name'].dropna().unique())
+        )
+
+        # ✅ FIX: Use .get() to safely access column
+        state_filter = st.sidebar.multiselect(
+            "Filter by State",
+            sorted(df.get("Student Doctor's State", pd.Series(dtype='str')).dropna().unique())
+        )
+
+        rbm_filter = st.sidebar.multiselect(
+            "Filter by RBM", sorted(df.get('HQ Code', pd.Series(dtype='str')).dropna().unique())
+        )
 
         if 'Entry Date' in df.columns:
             min_date, max_date = df['Entry Date'].min(), df['Entry Date'].max()
@@ -54,9 +64,9 @@ if uploaded_file:
         # Apply Filters
         if sbm_filter:
             df = df[df['User Name'].isin(sbm_filter)]
-        if state_filter:
+        if state_filter and "Student Doctor's State" in df.columns:
             df = df[df["Student Doctor's State"].isin(state_filter)]
-        if rbm_filter:
+        if rbm_filter and "HQ Code" in df.columns:
             df = df[df['HQ Code'].isin(rbm_filter)]
         if date_range and len(date_range) == 2:
             df = df[(df['Entry Date'] >= pd.to_datetime(date_range[0])) & (df['Entry Date'] <= pd.to_datetime(date_range[1]))]
@@ -69,14 +79,12 @@ if uploaded_file:
         sbm_count = df['User Name'].nunique()
         avg_responses_per_sbm = round(total_entries / sbm_count, 2) if sbm_count else 0
 
-        # KPI Targets per SBM
         assigned_per_sbm = 100
         execution_df = df.groupby('User Name')["Student Doctor's Name"].nunique().reset_index()
         execution_df.columns = ['User Name', 'Unique Student Doctors']
         execution_df['Execution %'] = round((execution_df['Unique Student Doctors'] / assigned_per_sbm) * 100, 2)
         avg_execution = round(execution_df['Execution %'].mean(), 2)
 
-        # Map SBM to RBM (from HQ Code)
         sbm_rbm_map = df.groupby('User Name')['HQ Code'].agg(lambda x: x.dropna().unique()[0] if len(x.dropna().unique()) > 0 else 'Unknown').to_dict()
         execution_df['RBM'] = execution_df['User Name'].map(sbm_rbm_map)
 
