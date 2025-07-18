@@ -1,6 +1,6 @@
 streamlit
 pandas
 plotly
-fuzzywuzzy
 openpyxl
 xlsxwriter
+rapidfuzz
