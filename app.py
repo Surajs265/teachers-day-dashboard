@@ -2,17 +2,21 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from io import BytesIO
-from fuzzywuzzy import process
+from thefuzz import process
 
 st.set_page_config(layout="wide")
 st.title("📊 Teachers' Day Campaign Dashboard")
 
-# Upload
+# Upload main Teachers' Day file
 uploaded_file = st.file_uploader("📁 Upload Teachers' Day Excel/CSV File", type=["xlsx", "csv"])
+
+# Upload SBM Master List (Optional)
+sbm_master_file = st.sidebar.file_uploader("📌 Upload Master SBM List (Optional)", type=["csv"])
 
 if uploaded_file:
     with st.spinner("Processing uploaded file... please wait ⏳"):
-        # Load data
+
+        # Load main data
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         else:
@@ -22,15 +26,21 @@ if uploaded_file:
         df.columns = df.columns.str.strip()
         df.dropna(subset=["Student Doctor's Name", "Teacher's Doctor's Name"], inplace=True)
 
+        # Load SBM master (if provided)
+        if sbm_master_file:
+            sbm_master = pd.read_csv(sbm_master_file)
+            standard_sbms = sbm_master['SBM'].dropna().unique().tolist()
+        else:
+            standard_sbms = df['User Name'].dropna().unique().tolist()
+
         # Fuzzy match SBM names
-        unique_sbms = df['User Name'].unique()
-        standard_sbms = list(set(unique_sbms))[:75]
         def match_sbm(name):
             match, score = process.extractOne(name, standard_sbms)
             return match if score > 95 else name
+
         df['User Name'] = df['User Name'].apply(match_sbm)
 
-        # Date column handling
+        # Date column
         if 'Entry Date' in df.columns:
             df['Entry Date'] = pd.to_datetime(df['Entry Date'], errors='coerce')
 
@@ -60,7 +70,7 @@ if uploaded_file:
         sbm_count = df['User Name'].nunique()
         avg_responses_per_sbm = round(total_entries / sbm_count, 2)
 
-        # KPI Targets per SBM
+        # SBM Execution
         assigned_per_sbm = 100
         execution_df = df.groupby('User Name')["Student Doctor's Name"].nunique().reset_index()
         execution_df.columns = ['User Name', 'Unique Student Doctors']
@@ -69,12 +79,8 @@ if uploaded_file:
 
         # Tabs
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📈 Summary",
-            "👤 SBM Execution",
-            "👨‍🏫 Teacher Analysis",
-            "📋 Duplicates",
-            "🌍 Advanced Visuals",
-            "📌 RBM Summary"
+            "📈 Summary", "👤 SBM Execution", "👨‍🏫 Teacher Analysis",
+            "📋 Duplicates", "🌍 Advanced Visuals", "📌 RBM Summary"
         ])
 
         with tab1:
@@ -91,7 +97,6 @@ if uploaded_file:
 
             st.metric("Avg Execution %", f"{avg_execution}%")
 
-            # Charts
             st.subheader("📊 Charts")
 
             with st.expander("🟢 Pie Chart: SBM-wise Contribution"):
@@ -118,8 +123,8 @@ if uploaded_file:
             execution_df['Rank'] = execution_df['Execution %'].rank(ascending=False).astype(int)
             st.dataframe(execution_df.sort_values("Execution %", ascending=False))
 
-            st.subheader("⚠️ Low Performing SBMs (<60%)")
-            st.dataframe(execution_df[execution_df['Execution %'] < 60])
+            st.subheader("⚠️ Low Performing SBMs (<40%)")
+            st.dataframe(execution_df[execution_df['Execution %'] < 40])
 
             def to_excel(df):
                 output = BytesIO()
@@ -155,23 +160,4 @@ if uploaded_file:
             st.subheader("📊 Stacked Bar: SBM & City")
             if "Student Doctor's City" in df.columns:
                 stacked_df = df.groupby(['User Name', "Student Doctor's City"]).size().reset_index(name='Count')
-                fig_stacked = px.bar(stacked_df, x='User Name', y='Count', color="Student Doctor's City")
-                st.plotly_chart(fig_stacked, use_container_width=True)
-
-        with tab6:
-            st.header("📌 RBM Summary & KPI Target (100 Doctors)")
-
-            if "HQ Code" in df.columns:
-                rbm_df = df.groupby('HQ Code')["Student Doctor's Name"].nunique().reset_index()
-                rbm_df.columns = ['RBM', 'Unique Student Doctors']
-                rbm_df['Execution %'] = round((rbm_df['Unique Student Doctors'] / assigned_per_sbm) * 100, 2)
-                st.dataframe(rbm_df.sort_values('Execution %', ascending=False))
-
-                fig_rbm = px.bar(rbm_df, x='RBM', y='Execution %', color='Execution %',
-                                 title='RBM-wise Execution %', color_continuous_scale='tealgrn')
-                st.plotly_chart(fig_rbm, use_container_width=True)
-            else:
-                st.warning("❗ 'HQ Code' column not found for RBM analysis.")
-
-else:
-    st.info("Please upload a Teachers' Day data file to get started.")
+                fig
