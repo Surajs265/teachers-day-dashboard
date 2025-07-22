@@ -4,160 +4,89 @@ import plotly.express as px
 from io import BytesIO
 from thefuzz import process
 
-st.set_page_config(layout="wide")
-st.title("📊 Teachers' Day Campaign Dashboard")
+st.set_page_config(page_title="Teachers' Day Dashboard", layout="wide")
 
-# Upload main Teachers' Day file
-uploaded_file = st.file_uploader("📁 Upload Teachers' Day Excel/CSV File", type=["xlsx", "csv"])
+st.title("🎓 Teachers' Day Campaign Dashboard")
 
-# Upload SBM Master List (Optional)
-sbm_master_file = st.sidebar.file_uploader("📌 Upload Master SBM List (Optional)", type=["csv"])
+# Upload main data
+uploaded_file = st.sidebar.file_uploader("📂 Upload Teachers' Day Data (CSV or Excel)", type=["csv", "xlsx"])
 
 if uploaded_file:
-    with st.spinner("Processing uploaded file... please wait ⏳"):
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
-        # Load main data
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+    df.columns = df.columns.str.strip()
+    df["User Name"] = df["User Name"].astype(str).str.strip()
 
-        # Clean & normalize
-        df.columns = df.columns.str.strip()
-        df.dropna(subset=["Student Doctor's Name", "Teacher's Doctor's Name"], inplace=True)
+    # --- Upload Master SBM List ---
+    st.sidebar.markdown("### 🧩 Master SBM Matching (Optional)")
+    sbm_master_file = st.sidebar.file_uploader("📌 Upload SBM Master CSV", type=["csv"])
+    
+    if sbm_master_file:
+        sbm_master = pd.read_csv(sbm_master_file)
+        st.sidebar.write("📄 Columns:", sbm_master.columns.tolist())
+        selected_col = st.sidebar.selectbox("Select SBM Column", sbm_master.columns)
+        try:
+            standard_sbms = sbm_master[selected_col].dropna().astype(str).str.strip().unique().tolist()
+        except:
+            st.error("❌ Error reading selected SBM column.")
+            st.stop()
+    else:
+        standard_sbms = df["User Name"].dropna().astype(str).str.strip().unique().tolist()
 
-        # Load SBM master (if provided)
-        if sbm_master_file:
-            sbm_master = pd.read_csv(sbm_master_file)
-            standard_sbms = sbm_master['SBM'].dropna().unique().tolist()
-        else:
-            standard_sbms = df['User Name'].dropna().unique().tolist()
+    # --- SBM Fuzzy Matching ---
+    def match_sbm(name):
+        match, score = process.extractOne(name, standard_sbms)
+        return match if score >= 95 else name
 
-        # Fuzzy match SBM names
-        def match_sbm(name):
-            match, score = process.extractOne(name, standard_sbms)
-            return match if score > 95 else name
+    df["User Name"] = df["User Name"].apply(match_sbm)
 
-        df['User Name'] = df['User Name'].apply(match_sbm)
+    # --- Metrics ---
+    total_responses = df.shape[0]
+    unique_students = df["Student Doctor's Name"].nunique()
+    unique_teachers = df["Teacher's Name"].nunique()
 
-        # Date column
-        if 'Entry Date' in df.columns:
-            df['Entry Date'] = pd.to_datetime(df['Entry Date'], errors='coerce')
+    col1, col2, col3 = st.columns(3)
+    col1.metric("📬 Total Responses", total_responses)
+    col2.metric("🧑‍⚕️ Unique Student Doctors", unique_students)
+    col3.metric("👨‍🏫 Unique Teachers", unique_teachers)
 
-        # Sidebar Filters
-        st.sidebar.header("🔍 Filters")
-        sbm_filter = st.sidebar.multiselect("Filter by SBM", sorted(df['User Name'].unique()))
-        state_filter = st.sidebar.multiselect("Filter by State", sorted(df["Student Doctor's State"].dropna().unique()))
-        if 'Entry Date' in df.columns:
-            min_date, max_date = df['Entry Date'].min(), df['Entry Date'].max()
-            date_range = st.sidebar.date_input("Filter by Date", [min_date, max_date])
-        else:
-            date_range = None
+    # --- Execution by SBM ---
+    st.markdown("### 📊 Execution by SBM")
+    sbm_exec = df.groupby("User Name")["Student Doctor's Name"].nunique().reset_index()
+    sbm_exec.columns = ["SBM", "Unique Student Count"]
+    sbm_exec["Execution %"] = (sbm_exec["Unique Student Count"] / 100 * 100).round(2)
 
-        # Apply Filters
-        if sbm_filter:
-            df = df[df['User Name'].isin(sbm_filter)]
-        if state_filter:
-            df = df[df["Student Doctor's State"].isin(state_filter)]
-        if date_range and len(date_range) == 2:
-            df = df[(df['Entry Date'] >= pd.to_datetime(date_range[0])) & (df['Entry Date'] <= pd.to_datetime(date_range[1]))]
+    st.dataframe(sbm_exec.sort_values("Execution %", ascending=False), use_container_width=True)
 
-        # Metrics
-        total_entries = len(df)
-        unique_students = df["Student Doctor's Name"].nunique()
-        unique_teachers = df["Teacher's Doctor's Name"].nunique()
-        duplicate_teacher_mentions = total_entries - unique_teachers
-        sbm_count = df['User Name'].nunique()
-        avg_responses_per_sbm = round(total_entries / sbm_count, 2)
+    # --- Top Teachers ---
+    st.markdown("### 🏅 Top 10 Teachers (By Number of Mentions)")
+    top_teachers = df["Teacher's Name"].value_counts().head(10).reset_index()
+    top_teachers.columns = ["Teacher", "Mentions"]
+    fig1 = px.bar(top_teachers, x="Mentions", y="Teacher", orientation="h", title="Top 10 Teachers", text="Mentions")
+    st.plotly_chart(fig1, use_container_width=True)
 
-        # SBM Execution
-        assigned_per_sbm = 100
-        execution_df = df.groupby('User Name')["Student Doctor's Name"].nunique().reset_index()
-        execution_df.columns = ['User Name', 'Unique Student Doctors']
-        execution_df['Execution %'] = round((execution_df['Unique Student Doctors'] / assigned_per_sbm) * 100, 2)
-        avg_execution = round(execution_df['Execution %'].mean(), 2)
+    # --- Top Student Doctors ---
+    st.markdown("### 👨‍⚕️ Top 10 Student Doctors (By Number of Entries)")
+    top_students = df["Student Doctor's Name"].value_counts().head(10).reset_index()
+    top_students.columns = ["Student Doctor", "Entries"]
+    fig2 = px.bar(top_students, x="Entries", y="Student Doctor", orientation="h", title="Top 10 Student Doctors", text="Entries")
+    st.plotly_chart(fig2, use_container_width=True)
 
-        # Tabs
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📈 Summary", "👤 SBM Execution", "👨‍🏫 Teacher Analysis",
-            "📋 Duplicates", "🌍 Advanced Visuals", "📌 RBM Summary"
-        ])
+    # --- Filter by SBM ---
+    st.markdown("### 🗂 SBM-wise Breakdown")
+    selected_sbm = st.selectbox("Select SBM to View", sbm_exec["SBM"].sort_values())
+    sbm_data = df[df["User Name"] == selected_sbm]
+    st.write(f"📄 Showing {sbm_data.shape[0]} entries for **{selected_sbm}**:")
+    st.dataframe(sbm_data, use_container_width=True)
 
-        with tab1:
-            st.header("📌 Overall Summary")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Responses", total_entries)
-            col2.metric("Unique Students", unique_students)
-            col3.metric("Unique Teachers", unique_teachers)
+    # --- Download Execution Data ---
+    def to_excel(df):
+        return df.to_csv(index=False).encode("utf-8")
 
-            col4, col5, col6 = st.columns(3)
-            col4.metric("Duplicate Mentions", duplicate_teacher_mentions)
-            col5.metric("SBMs Count", sbm_count)
-            col6.metric("Avg. Responses/SBM", avg_responses_per_sbm)
+    st.sidebar.download_button("📥 Download SBM Execution CSV", data=to_excel(sbm_exec), file_name="sbm_execution.csv", mime="text/csv")
 
-            st.metric("Avg Execution %", f"{avg_execution}%")
-
-            st.subheader("📊 Charts")
-
-            with st.expander("🟢 Pie Chart: SBM-wise Contribution"):
-                sbm_pie = df['User Name'].value_counts().reset_index()
-                sbm_pie.columns = ['User Name', 'Responses']
-                fig_pie = px.pie(sbm_pie, names='User Name', values='Responses', hole=0.4)
-                st.plotly_chart(fig_pie, use_container_width=True)
-
-            with st.expander("📈 Line Chart: Daily Trend"):
-                if 'Entry Date' in df.columns:
-                    trend = df.groupby(df['Entry Date'].dt.date).size().reset_index(name='Responses')
-                    fig_line = px.line(trend, x='Entry Date', y='Responses', markers=True)
-                    st.plotly_chart(fig_line, use_container_width=True)
-
-            with st.expander("🏙️ Bar Chart: Top Cities"):
-                if "Student Doctor's City" in df.columns:
-                    city_chart = df["Student Doctor's City"].value_counts().reset_index().head(10)
-                    city_chart.columns = ['City', 'Responses']
-                    fig_city = px.bar(city_chart, x='City', y='Responses', color='Responses')
-                    st.plotly_chart(fig_city, use_container_width=True)
-
-        with tab2:
-            st.header("🔢 SBM Execution Summary")
-            execution_df['Rank'] = execution_df['Execution %'].rank(ascending=False).astype(int)
-            st.dataframe(execution_df.sort_values("Execution %", ascending=False))
-
-            st.subheader("⚠️ Low Performing SBMs (<40%)")
-            st.dataframe(execution_df[execution_df['Execution %'] < 40])
-
-            def to_excel(df):
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df.to_excel(writer, index=False, sheet_name='SBM Summary')
-                return output.getvalue()
-
-            excel = to_excel(execution_df)
-            st.download_button("📥 Download Summary", data=excel, file_name="sbm_summary.xlsx")
-
-        with tab3:
-            st.header("👨‍🏫 Top Teachers")
-            teacher_counts = df["Teacher's Doctor's Name"].value_counts().reset_index()
-            teacher_counts.columns = ['Teacher Name', 'Mentions']
-            st.dataframe(teacher_counts.head(10))
-            fig = px.bar(teacher_counts.head(10), x='Mentions', y='Teacher Name', orientation='h')
-            st.plotly_chart(fig, use_container_width=True)
-
-        with tab4:
-            st.header("📋 Duplicate Teacher Doctors")
-            multi_teachers = df[df.duplicated("Teacher's Doctor's Name", keep=False)]
-            st.dataframe(multi_teachers[["Teacher's Doctor's Name", "Student Doctor's Name", "Student Doctor's City"]])
-
-        with tab5:
-            st.header("📊 Advanced Visuals")
-
-            st.subheader("🔥 Heatmap: SBM vs City")
-            if "Student Doctor's City" in df.columns:
-                heat_df = df.pivot_table(index='User Name', columns="Student Doctor's City", values="Student Doctor's Name", aggfunc='count', fill_value=0)
-                fig_heat = px.imshow(heat_df, aspect='auto', color_continuous_scale='YlGnBu')
-                st.plotly_chart(fig_heat, use_container_width=True)
-
-            st.subheader("📊 Stacked Bar: SBM & City")
-            if "Student Doctor's City" in df.columns:
-                stacked_df = df.groupby(['User Name', "Student Doctor's City"]).size().reset_index(name='Count')
-                fig
+else:
+    st.warning("📤 Please upload your Teachers' Day data file to get started.")
