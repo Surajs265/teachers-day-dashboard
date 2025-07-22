@@ -4,3 +4,5 @@ plotly
 openpyxl
 fuzzywuzzy
 python-Levenshtein
+pandas
+XlsxWriter
